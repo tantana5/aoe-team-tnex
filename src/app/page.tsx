@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { allBalancedSplits, type BalanceResult, type Selected } from "@/lib/balance";
+import type { SavedMatch } from "@/lib/types";
+import MatchScoreCard from "./components/MatchScoreCard";
 
 type Player = { name: string; score: number };
 
@@ -44,15 +46,21 @@ function PlayerSearchSelect({
     return list;
   }, [players, query]);
 
-  // danh sách các option có thể chọn bằng phím (loại bỏ những tên đã disabled)
-  const selectable = useMemo(
-    () => filtered.filter((p) => !(disabledNames.has(p.name) && p.name !== value)),
+  // tên đã được chọn ở ô khác -> hiển thị nhưng không cho chọn
+  const isDisabled = (name: string) =>
+    disabledNames.has(name) && name !== value;
+
+  // chỉ số các option có thể chọn (dùng cho điều hướng bàn phím)
+  const selectableIdx = useMemo(
+    () => filtered.map((p, i) => (isDisabled(p.name) ? -1 : i)).filter((i) => i >= 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [filtered, disabledNames, value]
   );
 
-  // reset highlight khi mở hoặc khi từ khóa thay đổi
+  // reset highlight khi mở hoặc khi từ khóa thay đổi (về option chọn được đầu tiên)
   useEffect(() => {
-    setHighlight(0);
+    setHighlight(selectableIdx[0] ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, open]);
 
   // cuộn option đang highlight vào tầm nhìn
@@ -68,6 +76,21 @@ function PlayerSearchSelect({
     setQuery("");
   };
 
+  // tìm option chọn được kế tiếp theo hướng (1 hoặc -1)
+  const moveHighlight = (dir: 1 | -1) => {
+    if (selectableIdx.length === 0) return;
+    const pos = selectableIdx.indexOf(highlight);
+    if (pos === -1) {
+      setHighlight(dir === 1 ? selectableIdx[0] : selectableIdx[selectableIdx.length - 1]);
+      return;
+    }
+    const nextPos = Math.min(
+      selectableIdx.length - 1,
+      Math.max(0, pos + dir)
+    );
+    setHighlight(selectableIdx[nextPos]);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!open) {
       if (e.key === "Enter" || e.key === "ArrowDown") {
@@ -78,14 +101,14 @@ function PlayerSearchSelect({
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlight((h) => Math.min(h + 1, selectable.length - 1));
+      moveHighlight(1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHighlight((h) => Math.max(h - 1, 0));
+      moveHighlight(-1);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const pick = selectable[highlight];
-      if (pick) commit(pick.name);
+      const pick = filtered[highlight];
+      if (pick && !isDisabled(pick.name)) commit(pick.name);
     } else if (e.key === "Escape") {
       e.preventDefault();
       setOpen(false);
@@ -97,17 +120,28 @@ function PlayerSearchSelect({
 
   return (
     <div className="relative flex-1" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={handleKeyDown}
-        className="w-full text-left bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400 flex justify-between items-center shadow-sm"
-      >
-        <span className={value ? "" : "text-gray-400"}>
-          {value ? `${value} (${selectedScore})` : "— Chọn game thủ —"}
-        </span>
-        <span className="text-gray-400 text-xs">▼</span>
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          onKeyDown={handleKeyDown}
+          className="flex-1 text-left bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400 flex justify-between items-center shadow-sm"
+        >
+          <span className={value ? "" : "text-gray-400"}>
+            {value ? `${value} (${selectedScore})` : "— Chọn game thủ —"}
+          </span>
+          <span className="text-gray-400 text-xs">▼</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          disabled={!value}
+          title="Bỏ chọn"
+          className="w-5 h-5 text-xs flex items-center justify-center text-gray-100 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed transition shrink-0"
+        >
+          ✖
+        </button>
+      </div>
 
       {open && (
         <div className="absolute z-20 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-xl max-h-72 overflow-hidden flex flex-col">
@@ -128,27 +162,39 @@ function PlayerSearchSelect({
                 ✖ Bỏ chọn
               </div>
             )}
-            {selectable.length === 0 && (
+            {filtered.length === 0 && (
               <div className="px-3 py-2 text-sm text-gray-400">
                 Không tìm thấy
               </div>
             )}
-            {selectable.map((p, i) => (
-              <div
-                key={p.name}
-                ref={(el) => {
-                  optionRefs.current[i] = el;
-                }}
-                onClick={() => commit(p.name)}
-                onMouseEnter={() => setHighlight(i)}
-                className={`px-3 py-2 text-sm flex justify-between cursor-pointer ${
-                  i === highlight ? "bg-blue-100" : "hover:bg-blue-50"
-                } ${p.name === value ? "font-semibold" : ""}`}
-              >
-                <span>{p.name}</span>
-                <span className="font-mono text-gray-500">{p.score}</span>
-              </div>
-            ))}
+            {filtered.map((p, i) => {
+              const disabled = isDisabled(p.name);
+              return (
+                <div
+                  key={p.name}
+                  ref={(el) => {
+                    optionRefs.current[i] = el;
+                  }}
+                  onClick={() => !disabled && commit(p.name)}
+                  onMouseEnter={() => !disabled && setHighlight(i)}
+                  className={`px-3 py-2 text-sm flex justify-between ${
+                    disabled
+                      ? "text-gray-300 cursor-not-allowed"
+                      : `cursor-pointer ${
+                          i === highlight ? "bg-blue-100" : "hover:bg-blue-50"
+                        }`
+                  } ${p.name === value ? "font-semibold" : ""}`}
+                >
+                  <span>
+                    {p.name}
+                    {disabled && (
+                      <span className="ml-1 text-xs text-gray-300">(đã chọn)</span>
+                    )}
+                  </span>
+                  <span className="font-mono text-gray-400">{p.score}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -167,6 +213,14 @@ export default function Home() {
   const [splits, setSplits] = useState<BalanceResult[]>([]);
   const [splitIdx, setSplitIdx] = useState(0);
   const [shareMsg, setShareMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
+  const [latestMatch, setLatestMatch] = useState<SavedMatch | null>(null);
+  const [showDateModal, setShowDateModal] = useState(false);
+  const [matchDate, setMatchDate] = useState("");
+  const [winsInput, setWinsInput] = useState({ a: "", b: "" });
 
   const result = splits[splitIdx] ?? null;
 
@@ -182,11 +236,40 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Lỗi tải dữ liệu");
       setPlayers(data.players || []);
+      // sau khi load sheet thành công, nạp lại kèo đã lưu gần nhất
+      loadLatestMatch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi không xác định");
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadLatestMatch = async () => {
+    try {
+      const res = await fetch("/api/matches/latest");
+      const data = await res.json();
+      if (res.ok && data.match) {
+        const m = data.match as SavedMatch;
+        setLatestMatch(m);
+      } else {
+        setLatestMatch(null);
+      }
+    } catch {
+      setLatestMatch(null);
+    }
+  };
+
+  // Nạp lại các ô chọn game thủ từ một kèo đã lưu (không hiển thị kết quả ghép đội).
+  const restoreFromMatch = (m: SavedMatch) => {
+    const size = m.teamSize || m.teamA.length;
+    setTeamSize(size);
+    setSlots([
+      ...m.teamA.map((p) => p.name),
+      ...m.teamB.map((p) => p.name),
+    ]);
+    setSplits([]);
+    setSplitIdx(0);
   };
 
   useEffect(() => {
@@ -299,6 +382,82 @@ export default function Home() {
     setTimeout(() => setShareMsg(null), 6000);
   };
 
+  const handleSaveMatch = async () => {
+    if (!result) return;
+    setSaveMsg(null);
+    // mở popup nhập ngày, mặc định hôm nay (local yyyy-mm-dd)
+    const today = new Date();
+    const tzOffset = today.getTimezoneOffset() * 60000;
+    const localDate = new Date(today.getTime() - tzOffset)
+      .toISOString()
+      .slice(0, 10);
+    setMatchDate(localDate);
+    setWinsInput({ a: "", b: "" });
+    setShowDateModal(true);
+  };
+
+  const confirmSaveMatch = async () => {
+    if (!result) return;
+
+    // tỷ số: bỏ trống cả 2 => null (bỏ qua); nếu nhập thì phải nhập cả 2
+    const a = winsInput.a.trim();
+    const b = winsInput.b.trim();
+    let winsA: number | null = null;
+    let winsB: number | null = null;
+    if (a !== "" || b !== "") {
+      if (a === "" || b === "") {
+        setSaveMsg({
+          ok: false,
+          text: "Vui lòng nhập tỷ số cho cả 2 đội hoặc để trống cả hai.",
+        });
+        return;
+      }
+      if (isNaN(Number(a)) || isNaN(Number(b))) {
+        setSaveMsg({ ok: false, text: "Tỷ số không hợp lệ." });
+        return;
+      }
+      winsA = Number(a);
+      winsB = Number(b);
+    }
+
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/matches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teamSize,
+          matchDate,
+          teamA: result.teamA,
+          teamB: result.teamB,
+          scoreA: result.scoreA,
+          scoreB: result.scoreB,
+          diff: result.diff,
+          handicaps: result.handicaps,
+          winsA,
+          winsB,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Lưu thất bại");
+      setSaveMsg({
+        ok: true,
+        text: `Đã lưu kèo đấu ngày ${matchDate}.`,
+      });
+      setShowDateModal(false);
+      // cập nhật lại kèo gần nhất hiển thị trên đầu trang
+      loadLatestMatch();
+    } catch (e) {
+      setSaveMsg({
+        ok: false,
+        text: e instanceof Error ? e.message : "Lưu thất bại",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleAutoFill = () => {
     const need = teamSize * 2;
     if (players.length < need) {
@@ -333,6 +492,18 @@ export default function Home() {
         </p>
       </header>
 
+      {latestMatch && (
+        <div className="mb-6">
+          <h2 className="font-semibold text-gray-800 mb-2">
+            🕑 Kèo gần nhất đã lưu
+          </h2>
+          <MatchScoreCard
+            match={latestMatch}
+            onUpdated={(m) => setLatestMatch(m)}
+          />
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-3 mb-4 items-center">
         <button
           onClick={fetchPlayers}
@@ -345,6 +516,13 @@ export default function Home() {
           className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition"
         >
           ⚡ Random {teamSize * 2} game thủ
+        </button>
+        <button
+          onClick={() => latestMatch && restoreFromMatch(latestMatch)}
+          disabled={!latestMatch}
+          className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium transition"
+        >
+          🔁 Chơi lại kèo cũ
         </button>
 
         <div className="flex items-center gap-2 ml-2">
@@ -442,11 +620,11 @@ export default function Home() {
 
       {result && (
         <section className="rounded-xl border border-gray-300 bg-white shadow-sm p-6">
-          <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 mb-4">
             <h2 className="text-2xl font-bold text-gray-900">
               📊 Kết quả ghép đội
             </h2>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm text-gray-500">
                 Cách {splitIdx + 1}/{splits.length}
                 {splitIdx === 0 ? " (cân bằng nhất)" : ""}
@@ -454,18 +632,37 @@ export default function Home() {
               <button
                 onClick={handleNextSplit}
                 disabled={splits.length <= 1}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium transition"
+                className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium transition whitespace-nowrap"
               >
                 🔀 Chia cách khác
               </button>
               <button
                 onClick={handleShareZalo}
-                className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium transition"
+                className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium transition whitespace-nowrap"
               >
                 💬 Chia sẻ Zalo
               </button>
+              <button
+                onClick={handleSaveMatch}
+                disabled={saving}
+                className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium transition whitespace-nowrap"
+              >
+                {saving ? "Đang lưu..." : "💾 Lưu lại kèo đấu"}
+              </button>
             </div>
           </div>
+
+          {saveMsg && (
+            <div
+              className={`mb-4 p-3 rounded-lg border text-sm ${
+                saveMsg.ok
+                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                  : "bg-red-50 border-red-300 text-red-700"
+              }`}
+            >
+              {saveMsg.text}
+            </div>
+          )}
 
           {shareMsg && (
             <div className="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-300 text-sky-800 text-sm">
@@ -545,6 +742,78 @@ export default function Home() {
             </table>
           </div>
         </section>
+      )}
+
+      {showDateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              💾 Lưu kèo đấu
+            </h3>
+            <label className="block text-sm text-gray-600 mb-1">
+              Ngày diễn ra kèo
+            </label>
+            <input
+              type="date"
+              value={matchDate}
+              onChange={(e) => setMatchDate(e.target.value)}
+              className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400 mb-4"
+            />
+
+            <label className="block text-sm text-gray-600 mb-1">
+              Tỷ số (tùy chọn)
+            </label>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-sm font-medium text-blue-600">🔵 Đội 1</span>
+              <input
+                type="number"
+                min={0}
+                value={winsInput.a}
+                onChange={(e) =>
+                  setWinsInput((s) => ({ ...s, a: e.target.value }))
+                }
+                placeholder="-"
+                className="w-16 text-center text-base font-mono font-bold border border-gray-300 rounded-lg py-1 focus:outline-none focus:border-blue-400"
+              />
+              <span className="text-gray-400 font-bold">-</span>
+              <input
+                type="number"
+                min={0}
+                value={winsInput.b}
+                onChange={(e) =>
+                  setWinsInput((s) => ({ ...s, b: e.target.value }))
+                }
+                placeholder="-"
+                className="w-16 text-center text-base font-mono font-bold border border-gray-300 rounded-lg py-1 focus:outline-none focus:border-red-400"
+              />
+              <span className="text-sm font-medium text-red-600">Đội 2 🔴</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">
+              Để trống cả hai nếu chưa có kết quả.
+            </p>
+
+            {saveMsg && !saveMsg.ok && (
+              <div className="mb-3 text-sm text-red-600">{saveMsg.text}</div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDateModal(false)}
+                disabled={saving}
+                className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm transition"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={confirmSaveMatch}
+                disabled={saving || !matchDate}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-300 text-white text-sm font-medium transition"
+              >
+                {saving ? "Đang lưu..." : "Lưu lại"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );
