@@ -173,6 +173,10 @@ export default function Home() {
   const fetchPlayers = async () => {
     setLoading(true);
     setError(null);
+    // reset các ô select mỗi lần tải lại từ sheet
+    setSlots(Array(teamSize * 2).fill(""));
+    setSplits([]);
+    setSplitIdx(0);
     try {
       const res = await fetch("/api/players");
       const data = await res.json();
@@ -235,6 +239,13 @@ export default function Home() {
     setSplitIdx(0);
   };
 
+  const handleReset = () => {
+    setSlots(Array(teamSize * 2).fill(""));
+    setSplits([]);
+    setSplitIdx(0);
+    setShareMsg(null);
+  };
+
   const handleNextSplit = () => {
     setSplitIdx((i) => (i + 1) % splits.length);
   };
@@ -290,12 +301,18 @@ export default function Home() {
 
   const handleAutoFill = () => {
     const need = teamSize * 2;
-    const top = [...players].slice(0, need).map((p) => p.name);
-    if (top.length < need) {
+    if (players.length < need) {
       setError(`Cần ít nhất ${need} game thủ trong sheet để tự động điền.`);
       return;
     }
-    setSlots(top);
+    // chọn ngẫu nhiên `need` game thủ (xáo trộn Fisher-Yates)
+    const pool = [...players];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const picked = pool.slice(0, need).map((p) => p.name);
+    setSlots(picked);
     setSplits([]);
     setSplitIdx(0);
   };
@@ -312,7 +329,7 @@ export default function Home() {
           ⚔️ Chia Team AOE Tnex
         </h1>
         <p className="text-gray-600 text-sm">
-          Dữ liệu game thủ đọc trực tiếp từ <a className="text-blue" target="_blank" href="https://docs.google.com/spreadsheets/d/1dlmPB-2zp4Woe3hCLGVZY3d-A-R4NWGJ634tANUu700/edit?usp=sharing">Google Sheet</a>. Chọn thành viên mỗi đội, hệ thống gợi ý chia team cân bằng nhất.
+          Dữ liệu game thủ đọc trực tiếp từ <a className="text-blue-600 hover:underline" target="_blank" href="https://docs.google.com/spreadsheets/d/1dlmPB-2zp4Woe3hCLGVZY3d-A-R4NWGJ634tANUu700/edit?usp=sharing">Google Sheet</a>. Chọn thành viên mỗi đội, hệ thống gợi ý chia team cân bằng nhất.
         </p>
       </header>
 
@@ -327,7 +344,7 @@ export default function Home() {
           onClick={handleAutoFill}
           className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition"
         >
-          ⚡ Tự điền top {teamSize * 2}
+          ⚡ Random {teamSize * 2} game thủ
         </button>
 
         <div className="flex items-center gap-2 ml-2">
@@ -407,7 +424,13 @@ export default function Home() {
         })}
       </div>
 
-      <div className="flex justify-center mb-8">
+      <div className="flex justify-center gap-3 mb-8">
+        <button
+          onClick={handleReset}
+          className="px-6 py-3 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold transition"
+        >
+          ↩️ Chọn lại
+        </button>
         <button
           onClick={handleBalance}
           disabled={!allChosen}
