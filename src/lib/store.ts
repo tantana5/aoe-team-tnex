@@ -1,9 +1,16 @@
 import { promises as fs } from "fs";
+import os from "os";
 import path from "path";
 import type { MatchStore, SavedMatch } from "./types";
 
 const BLOB_PATH = "matches.json";
-const LOCAL_PATH = path.join(process.cwd(), ".data", "matches.json");
+
+// Khi chạy serverless (vd Vercel) filesystem chỉ đọc, chỉ có /tmp ghi được.
+// Ưu tiên file dự án ở local dev; nếu môi trường không ghi được thì dùng thư mục tạm.
+const PROJECT_PATH = path.join(process.cwd(), ".data", "matches.json");
+const TMP_PATH = path.join(os.tmpdir(), "matches.json");
+const isServerless = !!process.env.VERCEL || !!process.env.AWS_REGION;
+const LOCAL_PATH = isServerless ? TMP_PATH : PROJECT_PATH;
 
 const hasBlob = () => !!process.env.BLOB_READ_WRITE_TOKEN;
 
@@ -57,7 +64,15 @@ export async function writeStore(store: MatchStore): Promise<void> {
     return;
   }
 
-  // dev fallback
-  await fs.mkdir(path.dirname(LOCAL_PATH), { recursive: true });
-  await fs.writeFile(LOCAL_PATH, json, "utf-8");
+  // dev fallback: ghi file (local dev dùng .data, serverless dùng /tmp)
+  try {
+    await fs.mkdir(path.dirname(LOCAL_PATH), { recursive: true });
+    await fs.writeFile(LOCAL_PATH, json, "utf-8");
+  } catch (e) {
+    // Trên môi trường read-only mà chưa cấu hình Blob -> không thể lưu bền vững.
+    throw new Error(
+      "Không lưu được dữ liệu: môi trường chỉ đọc và chưa cấu hình Vercel Blob (BLOB_READ_WRITE_TOKEN). " +
+        (e instanceof Error ? e.message : "")
+    );
+  }
 }
