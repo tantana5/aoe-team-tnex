@@ -1,4 +1,4 @@
-/** Tiện ích xử lý CSV dùng chung (đọc từ Google Sheet export, v.v.). */
+/** Tiện ích xử lý CSV dùng chung (import file CSV ở trang quản lý player). */
 
 /** Parse một dòng CSV, tôn trọng field có dấu nháy kép. */
 export function parseCsvLine(line: string): string[] {

@@ -7,6 +7,7 @@ const ITEMS = [
   { href: "/", label: "Chia team" },
   { href: "/history", label: "Lịch sử đấu" },
   { href: "/stats", label: "Thống kê" },
+  { href: "/players", label: "Player" },
 ];
 
 export default function NavBar() {

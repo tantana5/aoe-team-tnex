@@ -4,7 +4,7 @@ import NavBar from "./components/NavBar";
 
 export const metadata: Metadata = {
   title: "Team AOE TNEX",
-  description: "Chia 2 team từ điểm Google Sheet",
+  description: "Chia 2 team cân bằng theo điểm player",
 };
 
 export default function RootLayout({

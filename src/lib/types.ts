@@ -1,9 +1,15 @@
 import type { Handicap, Selected } from "./balance";
 
+/**
+ * Một kèo đấu.
+ * - Kèo nháp (isDraft): vừa chia team, chưa có tỷ số, chỉ nằm trong kho JSON (id dạng "draft-...").
+ * - Kèo đã lưu: có tỷ số, nằm trong Supabase (`matches` + `match_player_history`), id là số.
+ */
 export type SavedMatch = {
-  id: string;
+  id: number | string;
+  isDraft?: boolean;
   createdAt: string; // ISO datetime
-  matchDate: string; // ngày diễn ra kèo (yyyy-mm-dd), do người dùng nhập
+  matchDate: string; // ngày diễn ra kèo theo giờ VN (yyyy-mm-dd), suy ra từ createdAt
   teamSize: number;
   teamA: Selected[];
   teamB: Selected[];
@@ -11,15 +17,21 @@ export type SavedMatch = {
   scoreB: number;
   diff: number;
   handicaps: Handicap[];
-  // kết quả trận (cập nhật sau): "A" | "B" | null (chưa có)
-  winner?: "A" | "B" | null;
+  // kết quả trận: "A" | "B" | null (chưa có / hòa)
+  winner: "A" | "B" | null;
   // tỷ số ván thắng của mỗi đội (null = chưa cập nhật)
-  winsA?: number | null;
-  winsB?: number | null;
+  winsA: number | null;
+  winsB: number | null;
+  // điểm đã cộng/trừ cho mỗi player của từng đội theo tỷ số (null = chưa có thay đổi)
+  pointDelta: { A: number; B: number } | null;
 };
 
-// Toàn bộ dữ liệu: danh sách phẳng các kèo (mỗi item đã có matchDate riêng).
-// Mỗi ngày chỉ giữ lại MAX_MATCHES_PER_DAY kèo mới nhất (ghi đè kèo cũ).
-export type MatchStore = SavedMatch[];
-
-export const MAX_MATCHES_PER_DAY = 1;
+/** Thống kê thắng/thua của một player. */
+export type PlayerStat = {
+  key: string; // player_id, hoặc tên nếu dữ liệu không có id
+  name: string;
+  played: number;
+  wins: number;
+  losses: number;
+  winRate: number; // 0..1
+};

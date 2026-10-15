@@ -1,19 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { MatchStore, SavedMatch } from "@/lib/types";
+import type { PlayerStat } from "@/lib/types";
 import StatBarChart, { type ChartDatum } from "../components/StatBarChart";
 
-type PlayerStat = {
-  name: string;
-  played: number;
-  wins: number;
-  losses: number;
-  winRate: number; // 0..1
-};
-
 export default function StatsPage() {
-  const [matches, setMatches] = useState<SavedMatch[]>([]);
+  const [rawStats, setRawStats] = useState<PlayerStat[]>([]);
+  const [countedMatches, setCountedMatches] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"winRate" | "wins" | "played">(
@@ -25,11 +18,11 @@ export default function StatsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/matches");
+      const res = await fetch("/api/stats");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Lỗi tải dữ liệu");
-      const store = (data.store ?? []) as MatchStore;
-      setMatches(store);
+      setRawStats((data.stats ?? []) as PlayerStat[]);
+      setCountedMatches(Number(data.countedMatches ?? 0));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi không xác định");
     } finally {
@@ -41,38 +34,9 @@ export default function StatsPage() {
     load();
   }, []);
 
+  // thống kê đã tính sẵn ở server (/api/stats), client chỉ sắp xếp
   const stats = useMemo<PlayerStat[]>(() => {
-    const map = new Map<string, { played: number; wins: number }>();
-
-    for (const m of matches) {
-      // chỉ tính kèo đã có kết quả thắng/thua
-      if (m.winner !== "A" && m.winner !== "B") continue;
-      const winners = m.winner === "A" ? m.teamA : m.teamB;
-      const losers = m.winner === "A" ? m.teamB : m.teamA;
-
-      for (const p of winners) {
-        const cur = map.get(p.name) ?? { played: 0, wins: 0 };
-        cur.played += 1;
-        cur.wins += 1;
-        map.set(p.name, cur);
-      }
-      for (const p of losers) {
-        const cur = map.get(p.name) ?? { played: 0, wins: 0 };
-        cur.played += 1;
-        map.set(p.name, cur);
-      }
-    }
-
-    const list: PlayerStat[] = Array.from(map.entries()).map(
-      ([name, s]) => ({
-        name,
-        played: s.played,
-        wins: s.wins,
-        losses: s.played - s.wins,
-        winRate: s.played > 0 ? s.wins / s.played : 0,
-      })
-    );
-
+    const list = [...rawStats];
     list.sort((a, b) => {
       if (sortBy === "wins") return b.wins - a.wins;
       if (sortBy === "played") return b.played - a.played;
@@ -82,11 +46,7 @@ export default function StatsPage() {
     });
 
     return list;
-  }, [matches, sortBy]);
-
-  const countedMatches = matches.filter(
-    (m) => m.winner === "A" || m.winner === "B"
-  ).length;
+  }, [rawStats, sortBy]);
 
   // dữ liệu cho biểu đồ: cột vẽ theo tiêu chí đang sắp xếp
   const chartData = useMemo<ChartDatum[]>(() => {
@@ -213,7 +173,7 @@ export default function StatsPage() {
             <tbody>
               {stats.map((s, i) => (
                 <tr
-                  key={s.name}
+                  key={s.key}
                   className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
                 >
                   <td className="py-3 px-4 text-gray-400">{i + 1}</td>

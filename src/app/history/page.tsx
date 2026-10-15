@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MatchScoreCard from "../components/MatchScoreCard";
 import Pagination from "../components/Pagination";
-import type { MatchStore, SavedMatch } from "@/lib/types";
+import type { SavedMatch } from "@/lib/types";
 
 const PAGE_SIZE = 10;
 
@@ -16,9 +16,6 @@ export default function HistoryPage() {
   const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
 
-  const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<string | null>(null);
-
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -26,12 +23,9 @@ export default function HistoryPage() {
       const res = await fetch("/api/matches");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Lỗi tải dữ liệu");
-      const store = (data.store ?? []) as MatchStore;
-      // làm phẳng tất cả kèo, sắp xếp mới nhất trước
-      const all = [...store].sort((a, b) =>
-        a.matchDate < b.matchDate ? 1 : -1
-      );
-      setMatches(all);
+      // chỉ hiện kèo đã cập nhật tỷ số; server đã sắp xếp mới nhất trước
+      const all = (data.matches ?? []) as SavedMatch[];
+      setMatches(all.filter((m) => m.winsA !== null && m.winsB !== null));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi không xác định");
     } finally {
@@ -43,10 +37,10 @@ export default function HistoryPage() {
     load();
   }, []);
 
-  // lọc theo khoảng ngày (dựa trên ngày createdAt, so sánh yyyy-mm-dd)
+  // lọc theo khoảng ngày (ngày theo giờ VN, so sánh yyyy-mm-dd)
   const filtered = useMemo(() => {
     return matches.filter((m) => {
-      const day = m.createdAt.slice(0, 10);
+      const day = m.matchDate;
       if (fromDate && day < fromDate) return false;
       if (toDate && day > toDate) return false;
       return true;
@@ -76,50 +70,13 @@ export default function HistoryPage() {
     setToDate("");
   };
 
-  const importFromExcel = async () => {
-    const ok = window.confirm(
-      "⚠️ CẢNH BÁO: Thao tác này sẽ TẢI TOÀN BỘ lịch sử từ file Excel và thêm vào dữ liệu. Những ngày đã có kèo sẽ được giữ nguyên (bỏ qua), không bị ghi đè.\n\nBạn có chắc chắn muốn tiếp tục?"
-    );
-    if (!ok) return;
-
-    setImporting(true);
-    setImportMsg(null);
-    setError(null);
-    try {
-      const res = await fetch("/api/matches/import", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import thất bại");
-      setImportMsg(
-        `Đã import ${data.imported} kèo mới, bỏ qua ${data.skipped} ngày đã có dữ liệu.`
-      );
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Import thất bại");
-    } finally {
-      setImporting(false);
-    }
-  };
-
   return (
     <main className="min-h-screen max-w-5xl mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-2 text-gray-900">📜 Lịch sử đấu</h1>
       <p className="text-gray-600 text-sm mb-6">
-        Danh sách các kèo đã lưu. Lọc theo ngày và cập nhật tỷ số nếu cần.
+        Các kèo đã có tỷ số. Kèo chưa nhập tỷ số không hiển thị ở đây, hãy cập
+        nhật ở ô &quot;Kèo gần nhất đã lưu&quot; trên trang Chia team.
       </p>
-
-      <button
-        onClick={importFromExcel}
-        disabled={importing}
-        className="mb-6 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition disabled:opacity-50"
-      >
-        {importing ? "Đang import..." : "📥 Tải toàn bộ lịch sử từ Excel"}
-      </button>
-
-      {importMsg && (
-        <div className="mb-6 p-4 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-700 text-sm">
-          ✅ {importMsg}
-        </div>
-      )}
 
       {/* bộ lọc */}
       <div className="flex flex-wrap items-end gap-3 mb-6">
@@ -170,7 +127,7 @@ export default function HistoryPage() {
         <div className="text-center text-gray-500 py-10">Đang tải...</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border border-gray-300 bg-white shadow-sm p-8 text-center text-gray-500">
-          Không có kèo đấu nào phù hợp.
+          Không có kèo đấu nào đã có tỷ số phù hợp.
         </div>
       ) : (
         <>

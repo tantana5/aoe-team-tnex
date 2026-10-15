@@ -1,4 +1,6 @@
 export type Selected = {
+  /** id trong bảng players (null với dữ liệu cũ không có id) */
+  id?: number | null;
   name: string;
   score: number;
 };
@@ -19,7 +21,7 @@ export type BalanceResult = {
 };
 
 /** Dựng kết quả (điểm, chênh lệch, chấp quân) cho một cách chia cụ thể. */
-function buildResult(teamA: Selected[], teamB: Selected[]): BalanceResult {
+export function buildResult(teamA: Selected[], teamB: Selected[]): BalanceResult {
   const scoreA = teamA.reduce((s, p) => s + p.score, 0);
   const scoreB = teamB.reduce((s, p) => s + p.score, 0);
   const diff = Math.round(Math.abs(scoreA - scoreB) * 100) / 100;

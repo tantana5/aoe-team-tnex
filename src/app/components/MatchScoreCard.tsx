@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { SavedMatch } from "@/lib/types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const formatDelta = (n: number) => (n > 0 ? `+${n}` : String(n));
 
 export default function MatchScoreCard({
   match,
@@ -46,12 +47,21 @@ export default function MatchScoreCard({
           id: current.id,
           winsA: Number(a),
           winsB: Number(b),
+          // kèo nháp: gửi kèm đội hình để server dựng lại nếu kho JSON không còn kèo nháp
+          ...(current.isDraft
+            ? {
+                lineup: {
+                  teamA: current.teamA.map((p) => p.id),
+                  teamB: current.teamB.map((p) => p.id),
+                },
+              }
+            : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Cập nhật thất bại");
       setCurrent(data.match as SavedMatch);
-      setMsg({ ok: true, text: "Đã cập nhật tỷ số." });
+      setMsg({ ok: true, text: "Đã cập nhật tỷ số và điểm player." });
       onUpdated?.(data.match as SavedMatch);
     } catch (e) {
       setMsg({
@@ -69,6 +79,11 @@ export default function MatchScoreCard({
         <div className="text-left font-medium text-gray-500 mb-1">
           {current.matchDate} ·{" "}
           {current.teamSize}v{current.teamSize}
+          {current.isDraft && (
+            <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">
+              Nháp · nhập tỷ số để lưu vào lịch sử
+            </span>
+          )}
         </div>
 
         <div className="flex items-center justify-center gap-3 mb-3">
@@ -139,6 +154,19 @@ export default function MatchScoreCard({
             }`}
           >
             {msg.text}
+          </div>
+        )}
+
+        {current.pointDelta && (
+          <div className="text-center text-xs text-gray-500 mb-3">
+            Điểm mỗi người:{" "}
+            <span className={current.pointDelta.A > 0 ? "text-emerald-600" : "text-red-500"}>
+              Đội 1 {formatDelta(current.pointDelta.A)}
+            </span>
+            {" · "}
+            <span className={current.pointDelta.B > 0 ? "text-emerald-600" : "text-red-500"}>
+              Đội 2 {formatDelta(current.pointDelta.B)}
+            </span>
           </div>
         )}
 

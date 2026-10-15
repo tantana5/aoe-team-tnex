@@ -5,7 +5,7 @@ import { allBalancedSplits, type BalanceResult, type Selected } from "@/lib/bala
 import type { SavedMatch } from "@/lib/types";
 import MatchScoreCard from "./components/MatchScoreCard";
 
-type Player = { name: string; score: number };
+type Player = { id: number; name: string; score: number };
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -218,25 +218,36 @@ export default function Home() {
     null
   );
   const [latestMatch, setLatestMatch] = useState<SavedMatch | null>(null);
-  const [showDateModal, setShowDateModal] = useState(false);
-  const [matchDate, setMatchDate] = useState("");
-  const [winsInput, setWinsInput] = useState({ a: "", b: "" });
+
+  // Mỗi lần đổi thành phần 2 đội -> tăng "thế hệ". Kèo đã lưu chỉ được cập nhật lại
+  // (khi bấm Chia TEAM lần nữa / Chia cách khác) nếu cùng thế hệ, ngược lại tạo kèo mới.
+  const rosterGen = useRef(0);
+  const savedMatch = useRef<{ gen: number; id: number | string } | null>(null);
+  // hàng đợi để các lần lưu chạy tuần tự, đúng thứ tự bấm
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
   const result = splits[splitIdx] ?? null;
+
+  /** Xóa kết quả chia hiện tại khi thành phần đội thay đổi. */
+  const clearSplits = () => {
+    setSplits([]);
+    setSplitIdx(0);
+    setSaveMsg(null);
+    rosterGen.current += 1;
+  };
 
   const fetchPlayers = async () => {
     setLoading(true);
     setError(null);
-    // reset các ô select mỗi lần tải lại từ sheet
+    // reset các ô select mỗi lần tải lại danh sách
     setSlots(Array(teamSize * 2).fill(""));
-    setSplits([]);
-    setSplitIdx(0);
+    clearSplits();
     try {
       const res = await fetch("/api/players");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Lỗi tải dữ liệu");
       setPlayers(data.players || []);
-      // sau khi load sheet thành công, nạp lại kèo đã lưu gần nhất
+      // nạp lại kèo đã lưu gần nhất
       loadLatestMatch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lỗi không xác định");
@@ -263,13 +274,12 @@ export default function Home() {
   // Nạp lại các ô chọn game thủ từ một kèo đã lưu (không hiển thị kết quả ghép đội).
   const restoreFromMatch = (m: SavedMatch) => {
     const size = m.teamSize || m.teamA.length;
+    // ưu tiên tên hiện tại theo id (player có thể đã đổi tên sau kèo đó)
+    const nameOf = (p: Selected) =>
+      players.find((x) => x.id === p.id)?.name ?? p.name;
     setTeamSize(size);
-    setSlots([
-      ...m.teamA.map((p) => p.name),
-      ...m.teamB.map((p) => p.name),
-    ]);
-    setSplits([]);
-    setSplitIdx(0);
+    setSlots([...m.teamA.map(nameOf), ...m.teamB.map(nameOf)]);
+    clearSplits();
   };
 
   useEffect(() => {
@@ -285,15 +295,13 @@ export default function Home() {
       next[idx] = name;
       return next;
     });
-    setSplits([]);
-    setSplitIdx(0);
+    clearSplits();
   };
 
   const changeTeamSize = (size: number) => {
     setTeamSize(size);
     setSlots(Array(size * 2).fill(""));
-    setSplits([]);
-    setSplitIdx(0);
+    clearSplits();
     setError(null);
   };
 
@@ -313,24 +321,108 @@ export default function Home() {
     return round2(sum);
   };
 
+  /**
+   * Lưu cách chia đang hiển thị thành "kèo nháp" (kho JSON, chưa ghi Supabase).
+   * Lần đầu với một thành phần đội -> tạo kèo nháp mới; các lần sau -> cập nhật lại kèo nháp đó.
+   * Kèo chỉ được ghi vào Supabase khi nhập tỷ số.
+   */
+  const persistSplit = (r: BalanceResult) => {
+    const gen = rosterGen.current;
+    const teamA = r.teamA.map((p) => p.id);
+    const teamB = r.teamB.map((p) => p.id);
+
+    saveQueue.current = saveQueue.current.then(async () => {
+      setSaving(true);
+      try {
+        const cur = savedMatch.current;
+        const id = cur && cur.gen === gen ? cur.id : null;
+        const res = await fetch("/api/matches", {
+          method: id === null ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(id === null ? { teamA, teamB } : { id, teamA, teamB }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Lưu kèo thất bại");
+
+        const m = data.match as SavedMatch;
+        savedMatch.current = { gen, id: m.id };
+        setLatestMatch(m);
+        if (gen === rosterGen.current) {
+          setSaveMsg({
+            ok: true,
+            text:
+              (id === null
+                ? "Đã lưu kèo nháp."
+                : "Đã cập nhật kèo nháp theo cách chia mới.") +
+              " Nhập tỷ số ở ô Kèo gần nhất để lưu vào lịch sử.",
+          });
+        }
+      } catch (e) {
+        setSaveMsg({
+          ok: false,
+          text: e instanceof Error ? e.message : "Lưu kèo thất bại",
+        });
+      } finally {
+        setSaving(false);
+      }
+    });
+  };
+
   const handleBalance = () => {
-    const selected: Selected[] = activeSlots.map((name) => ({
-      name,
-      score: scoreOf(name) ?? 0,
-    }));
-    setSplits(allBalancedSplits(selected));
+    const selected: Selected[] = [];
+    for (const name of activeSlots) {
+      const p = players.find((x) => x.name === name);
+      if (!p) {
+        setError(
+          `"${name}" không còn trong danh sách player đang bật. Hãy chọn lại.`
+        );
+        return;
+      }
+      selected.push({ id: p.id, name: p.name, score: p.score });
+    }
+    setError(null);
+    const all = allBalancedSplits(selected);
+    setSplits(all);
     setSplitIdx(0);
+    if (all[0]) persistSplit(all[0]);
   };
 
   const handleReset = () => {
     setSlots(Array(teamSize * 2).fill(""));
-    setSplits([]);
-    setSplitIdx(0);
+    clearSplits();
     setShareMsg(null);
   };
 
   const handleNextSplit = () => {
-    setSplitIdx((i) => (i + 1) % splits.length);
+    if (splits.length === 0) return;
+    const next = (splitIdx + 1) % splits.length;
+    setSplitIdx(next);
+    persistSplit(splits[next]);
+  };
+
+  // Kèo đã có tỷ số thì không đổi đội nữa: lần chia tiếp theo sẽ tạo kèo mới.
+  const handleLatestUpdated = (m: SavedMatch) => {
+    // kèo nháp vừa có tỷ số -> đã lưu sang Supabase (id mới); lần chia sau tạo kèo nháp mới
+    const prevId = latestMatch?.id;
+    if (
+      m.winsA !== null &&
+      (savedMatch.current?.id === m.id || savedMatch.current?.id === prevId)
+    ) {
+      savedMatch.current = null;
+    }
+    setLatestMatch(m);
+    // tỷ số làm thay đổi điểm player -> nạp lại điểm mới (giữ nguyên các ô đã chọn)
+    refreshPlayerScores();
+  };
+
+  const refreshPlayerScores = async () => {
+    try {
+      const res = await fetch("/api/players");
+      const data = await res.json();
+      if (res.ok) setPlayers(data.players || []);
+    } catch {
+      // giữ danh sách cũ nếu lỗi mạng
+    }
   };
 
   const buildShareText = (r: BalanceResult) => {
@@ -382,86 +474,10 @@ export default function Home() {
     setTimeout(() => setShareMsg(null), 6000);
   };
 
-  const handleSaveMatch = async () => {
-    if (!result) return;
-    setSaveMsg(null);
-    // mở popup nhập ngày, mặc định hôm nay (local yyyy-mm-dd)
-    const today = new Date();
-    const tzOffset = today.getTimezoneOffset() * 60000;
-    const localDate = new Date(today.getTime() - tzOffset)
-      .toISOString()
-      .slice(0, 10);
-    setMatchDate(localDate);
-    setWinsInput({ a: "", b: "" });
-    setShowDateModal(true);
-  };
-
-  const confirmSaveMatch = async () => {
-    if (!result) return;
-
-    // tỷ số: bỏ trống cả 2 => null (bỏ qua); nếu nhập thì phải nhập cả 2
-    const a = winsInput.a.trim();
-    const b = winsInput.b.trim();
-    let winsA: number | null = null;
-    let winsB: number | null = null;
-    if (a !== "" || b !== "") {
-      if (a === "" || b === "") {
-        setSaveMsg({
-          ok: false,
-          text: "Vui lòng nhập tỷ số cho cả 2 đội hoặc để trống cả hai.",
-        });
-        return;
-      }
-      if (isNaN(Number(a)) || isNaN(Number(b))) {
-        setSaveMsg({ ok: false, text: "Tỷ số không hợp lệ." });
-        return;
-      }
-      winsA = Number(a);
-      winsB = Number(b);
-    }
-
-    setSaving(true);
-    setSaveMsg(null);
-    try {
-      const res = await fetch("/api/matches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          teamSize,
-          matchDate,
-          teamA: result.teamA,
-          teamB: result.teamB,
-          scoreA: result.scoreA,
-          scoreB: result.scoreB,
-          diff: result.diff,
-          handicaps: result.handicaps,
-          winsA,
-          winsB,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Lưu thất bại");
-      setSaveMsg({
-        ok: true,
-        text: `Đã lưu kèo đấu ngày ${matchDate}.`,
-      });
-      setShowDateModal(false);
-      // cập nhật lại kèo gần nhất hiển thị trên đầu trang
-      loadLatestMatch();
-    } catch (e) {
-      setSaveMsg({
-        ok: false,
-        text: e instanceof Error ? e.message : "Lưu thất bại",
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleAutoFill = () => {
     const need = teamSize * 2;
     if (players.length < need) {
-      setError(`Cần ít nhất ${need} game thủ trong sheet để tự động điền.`);
+      setError(`Cần ít nhất ${need} game thủ đang bật để tự động điền.`);
       return;
     }
     // chọn ngẫu nhiên `need` game thủ (xáo trộn Fisher-Yates)
@@ -472,8 +488,7 @@ export default function Home() {
     }
     const picked = pool.slice(0, need).map((p) => p.name);
     setSlots(picked);
-    setSplits([]);
-    setSplitIdx(0);
+    clearSplits();
   };
 
   const sortedPlayers = useMemo(
@@ -488,7 +503,13 @@ export default function Home() {
           ⚔️ Chia Team AOE Tnex
         </h1>
         <p className="text-gray-600 text-sm">
-          Dữ liệu game thủ đọc trực tiếp từ <a className="text-blue-600 hover:underline" target="_blank" href="https://docs.google.com/spreadsheets/d/1dlmPB-2zp4Woe3hCLGVZY3d-A-R4NWGJ634tANUu700/edit?usp=sharing">Google Sheet</a>. Chọn thành viên mỗi đội, hệ thống gợi ý chia team cân bằng nhất.
+          Chọn thành viên mỗi đội, hệ thống gợi ý chia team cân bằng nhất. Mỗi lần
+          chia team, kèo được lưu nháp (chưa vào lịch sử); khi nhập tỷ số, kèo mới
+          được lưu vào lịch sử và cộng/trừ điểm player. Quản lý danh sách ở trang{" "}
+          <a className="text-blue-600 hover:underline" href="/players">
+            Player
+          </a>
+          .
         </p>
       </header>
 
@@ -497,10 +518,7 @@ export default function Home() {
           <h2 className="font-semibold text-gray-800 mb-2">
             🕑 Kèo gần nhất đã lưu
           </h2>
-          <MatchScoreCard
-            match={latestMatch}
-            onUpdated={(m) => setLatestMatch(m)}
-          />
+          <MatchScoreCard match={latestMatch} onUpdated={handleLatestUpdated} />
         </div>
       )}
 
@@ -509,7 +527,7 @@ export default function Home() {
           onClick={fetchPlayers}
           className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition"
         >
-          🔄 Tải lại từ Sheet
+          🔄 Tải lại danh sách
         </button>
         <button
           onClick={handleAutoFill}
@@ -546,10 +564,6 @@ export default function Home() {
       {error && (
         <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-300 text-red-700 text-sm">
           ⚠️ {error}
-          <div className="mt-2 text-xs text-red-600/80">
-            Mẹo: Mở Google Sheet → Chia sẻ → đặt quyền &quot;Bất kỳ ai có đường
-            liên kết&quot; (Người xem).
-          </div>
         </div>
       )}
 
@@ -642,17 +656,16 @@ export default function Home() {
               >
                 💬 Chia sẻ Zalo
               </button>
-              <button
-                onClick={handleSaveMatch}
-                disabled={saving}
-                className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium transition whitespace-nowrap"
-              >
-                {saving ? "Đang lưu..." : "💾 Lưu lại kèo đấu"}
-              </button>
             </div>
           </div>
 
-          {saveMsg && (
+          {saving && (
+            <div role="status" className="mb-4 text-sm text-gray-500">
+              💾 Đang lưu kèo...
+            </div>
+          )}
+
+          {!saving && saveMsg && (
             <div
               className={`mb-4 p-3 rounded-lg border text-sm ${
                 saveMsg.ok
@@ -742,78 +755,6 @@ export default function Home() {
             </table>
           </div>
         </section>
-      )}
-
-      {showDateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              💾 Lưu kèo đấu
-            </h3>
-            <label className="block text-sm text-gray-600 mb-1">
-              Ngày diễn ra kèo
-            </label>
-            <input
-              type="date"
-              value={matchDate}
-              onChange={(e) => setMatchDate(e.target.value)}
-              className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400 mb-4"
-            />
-
-            <label className="block text-sm text-gray-600 mb-1">
-              Tỷ số (tùy chọn)
-            </label>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-medium text-blue-600">🔵 Đội 1</span>
-              <input
-                type="number"
-                min={0}
-                value={winsInput.a}
-                onChange={(e) =>
-                  setWinsInput((s) => ({ ...s, a: e.target.value }))
-                }
-                placeholder="-"
-                className="w-16 text-center text-base font-mono font-bold border border-gray-300 rounded-lg py-1 focus:outline-none focus:border-blue-400"
-              />
-              <span className="text-gray-400 font-bold">-</span>
-              <input
-                type="number"
-                min={0}
-                value={winsInput.b}
-                onChange={(e) =>
-                  setWinsInput((s) => ({ ...s, b: e.target.value }))
-                }
-                placeholder="-"
-                className="w-16 text-center text-base font-mono font-bold border border-gray-300 rounded-lg py-1 focus:outline-none focus:border-red-400"
-              />
-              <span className="text-sm font-medium text-red-600">Đội 2 🔴</span>
-            </div>
-            <p className="text-xs text-gray-400 mb-4">
-              Để trống cả hai nếu chưa có kết quả.
-            </p>
-
-            {saveMsg && !saveMsg.ok && (
-              <div className="mb-3 text-sm text-red-600">{saveMsg.text}</div>
-            )}
-
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowDateModal(false)}
-                disabled={saving}
-                className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm transition"
-              >
-                Hủy
-              </button>
-              <button
-                onClick={confirmSaveMatch}
-                disabled={saving || !matchDate}
-                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-300 text-white text-sm font-medium transition"
-              >
-                {saving ? "Đang lưu..." : "Lưu lại"}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </main>
   );
